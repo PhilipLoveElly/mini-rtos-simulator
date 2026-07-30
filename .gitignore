@@ -1,0 +1,28 @@
+# Build outputs
+mini_rtos
+build/
+bin/
+
+# Object and executable files
+*.o
+*.obj
+*.out
+*.exe
+
+# Debug files
+*.dSYM/
+core
+core.*
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Editor settings
+.vscode/
+
+# OS generated files
+.DS_Store
+Thumbs.db

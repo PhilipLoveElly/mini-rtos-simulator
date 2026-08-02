@@ -26,3 +26,22 @@ compile_commands.json
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Build outputs
+scheduler_benchmark
+scheduler_latency_benchmark
+priority_inheritance_benchmark
+message_queue_benchmark
+mini_rtos
+
+# Benchmark results
+benchmark.csv
+benchmark_summary.csv
+latency_4_tasks.csv
+
+benchmark_results/
+latency_results/
+
+# Python cache
+__pycache__/
+*.pyc

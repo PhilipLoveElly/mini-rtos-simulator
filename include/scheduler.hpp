@@ -2,8 +2,10 @@
 
 #include "task.hpp"
 #include "message_queue.hpp"
+#include "trace.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <ucontext.h>
@@ -59,6 +61,17 @@ public:
     bool receiveMessage(
         rtos::MessageQueue<T> &queue,
         T &output);
+
+    void enableYieldProfiling(
+        std::size_t warmup_samples,
+        std::size_t expected_samples);
+
+    const std::vector<std::uint64_t> &
+    getYieldCycleSamples() const;
+
+    std::uint64_t currentTick() const;
+
+    void setPriorityInheritanceEnabled(bool enabled);
 
 private:
     static constexpr std::size_t TASK_STACK_SIZE = 64 * 1024;
@@ -144,6 +157,15 @@ private:
         rtos::MessageQueue<T> &queue,
         TaskControlBlock *task,
         T &output);
+
+    bool yield_profiling_enabled_ = false;
+
+    std::size_t profiling_warmup_remaining_ = 0;
+
+    std::vector<std::uint64_t>
+        yield_cycle_samples_ns_;
+
+    bool priority_inheritance_enabled_ = true;
 };
 
 #include "scheduler.tpp"

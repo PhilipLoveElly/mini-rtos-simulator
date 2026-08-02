@@ -1,6 +1,7 @@
 #include "scheduler.hpp"
 #include "semaphore.hpp"
 #include "mutex.hpp"
+#include "trace.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <vector>
+#include <chrono>
 
 Scheduler *Scheduler::active_scheduler_ = nullptr;
 
@@ -70,12 +72,12 @@ void Scheduler::taskEntry()
 
     task->state = TaskState::Terminated;
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << scheduler->current_tick_
         << "] Task terminated: "
         << task->name
-        << '\n';
+        << '\n');
 }
 
 void Scheduler::updateBlockedTasks()
@@ -90,12 +92,12 @@ void Scheduler::updateBlockedTasks()
             break;
         }
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Task ready: "
             << task->name
-            << '\n';
+            << '\n');
 
         delayed_queue_.pop_front();
 
@@ -171,38 +173,88 @@ void Scheduler::run(std::uint64_t max_ticks)
         current_task_ = next_task;
         current_task_->state = TaskState::Running;
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Running: "
             << current_task_->name
-            << '\n';
+            << '\n');
+
+        using ProfilingClock =
+            std::chrono::steady_clock;
+
+        const auto cycle_start =
+            ProfilingClock::now();
 
         swapcontext(
             &scheduler_context_,
             &current_task_->context);
 
+        const auto cycle_end =
+            ProfilingClock::now();
+
+        /*
+         * Task 回到 scheduler 時仍然是 Running，
+         * 表示它是主動呼叫 yield() 回來。
+         *
+         * Delay、Semaphore、Mutex block 或 Terminated
+         * 都不應記入 yield latency。
+         */
+        if (yield_profiling_enabled_ &&
+            current_task_->state ==
+                TaskState::Running)
+        {
+            const auto elapsed_ns =
+                std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(
+                    cycle_end - cycle_start)
+                    .count();
+
+            if (profiling_warmup_remaining_ > 0)
+            {
+                --profiling_warmup_remaining_;
+            }
+            else
+            {
+                yield_cycle_samples_ns_.push_back(
+                    static_cast<std::uint64_t>(
+                        elapsed_ns));
+            }
+        }
+
         if (current_task_->state == TaskState::Running)
         {
+            /*
+             * Task 回到 scheduler 時仍然是 Running，
+             * 代表它是主動呼叫 yield()。
+             */
+
+            if (yield_profiling_enabled_)
+            {
+                // 收集 latency sample
+            }
+
             enqueueReadyTask(current_task_);
         }
+
+        current_task_ = nullptr;
 
         ++current_tick_;
     }
 
     if (!hasActiveTasks())
     {
-        std::cout
-            << "[Scheduler] All tasks terminated at tick "
+        RTOS_TRACE(
+            "[Scheduler] All tasks terminated at tick "
             << current_tick_
-            << '\n';
+            << '\n');
     }
     else
     {
-        std::cout
-            << "[Scheduler] Maximum tick limit reached: "
+        RTOS_TRACE(
+            "[Scheduler] Maximum tick limit reached: "
             << max_ticks
-            << '\n';
+            << '\n');
     }
 
     current_task_ = nullptr;
@@ -239,14 +291,14 @@ void Scheduler::delayCurrentTask(std::uint64_t ticks)
 
     insertDelayedTask(current_task_);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
         << " blocked until tick "
         << current_task_->wake_tick
-        << '\n';
+        << '\n');
 
     swapcontext(
         &current_task_->context,
@@ -273,14 +325,12 @@ void Scheduler::yieldCurrentTask()
         return;
     }
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
-        << " yielded\n";
-
-    enqueueReadyTask(current_task_);
+        << " yielded\n");
 
     swapcontext(
         &current_task_->context,
@@ -306,12 +356,12 @@ bool Scheduler::advanceToNextWakeTick(
 
     if (next_wake_tick > current_tick_)
     {
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] No ready task, advancing to tick "
             << next_wake_tick
-            << '\n';
+            << '\n');
 
         current_tick_ = next_wake_tick;
     }
@@ -412,12 +462,12 @@ void Scheduler::takeSemaphore(
         semaphore,
         current_task_);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
-        << " waiting for semaphore\n";
+        << " waiting for semaphore\n");
 
     swapcontext(
         &current_task_->context,
@@ -436,12 +486,12 @@ bool Scheduler::giveSemaphore(
 
         enqueueReadyTask(task);
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Semaphore woke: "
             << task->name
-            << '\n';
+            << '\n');
 
         return true;
     }
@@ -449,10 +499,10 @@ bool Scheduler::giveSemaphore(
     if (semaphore.count_ >=
         semaphore.max_count_)
     {
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
-            << "] Semaphore give failed: full\n";
+            << "] Semaphore give failed: full\n");
 
         return false;
     }
@@ -483,12 +533,12 @@ bool Scheduler::lockMutex(
             ->owned_mutexes
             .push_back(&mutex);
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] "
             << current_task_->name
-            << " acquired mutex\n";
+            << " acquired mutex\n");
 
         return true;
     }
@@ -498,12 +548,12 @@ bool Scheduler::lockMutex(
      */
     if (mutex.owner_ == current_task_)
     {
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] "
             << current_task_->name
-            << " attempted recursive mutex lock\n";
+            << " attempted recursive mutex lock\n");
 
         return false;
     }
@@ -514,6 +564,10 @@ bool Scheduler::lockMutex(
     /*
      * 在真正阻塞之前檢查：
      * 此次 lock 是否會形成等待環。
+     *
+     * Deadlock prevention 與 Priority Inheritance
+     * 是兩個不同功能，因此即使 PI 關閉，
+     * 仍然保留 deadlock detection。
      */
     std::vector<TaskControlBlock *>
         deadlock_path;
@@ -523,16 +577,16 @@ bool Scheduler::lockMutex(
             mutex,
             deadlock_path))
     {
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
-            << "] Deadlock prevented: ";
+            << "] Deadlock prevented: ");
 
         printDeadlockPath(
             deadlock_path);
 
-        std::cout
-            << '\n';
+        RTOS_TRACE(
+            '\n');
 
         return false;
     }
@@ -547,28 +601,36 @@ bool Scheduler::lockMutex(
     current_task_->waiting_mutex =
         &mutex;
 
+    /*
+     * 即使 PI 關閉，waiter 仍然必須加入
+     * Mutex wait list，否則之後無法被喚醒。
+     */
     insertMutexWaiter(
         mutex,
         current_task_);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
         << " waiting for mutex owned by "
         << owner->name
-        << '\n';
+        << '\n');
 
     /*
-     * 重新計算 owner 的有效優先級。
+     * 只有在 Priority Inheritance 開啟時，
+     * 才重新計算並提升 owner 的有效優先級。
      *
      * 若 owner 自己也正在等待另一把 Mutex，
      * recomputeEffectivePriority() 會沿著
      * waiting_mutex->owner_ 繼續向上傳遞。
      */
-    recomputeEffectivePriority(
-        owner);
+    if (priority_inheritance_enabled_)
+    {
+        recomputeEffectivePriority(
+            owner);
+    }
 
     swapcontext(
         &current_task_->context,
@@ -595,12 +657,12 @@ bool Scheduler::unlockMutex(
      */
     if (mutex.owner_ != current_task_)
     {
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Mutex unlock failed: "
             << current_task_->name
-            << " is not the owner\n";
+            << " is not the owner\n");
 
         return false;
     }
@@ -624,25 +686,32 @@ bool Scheduler::unlockMutex(
         mutex.owner_ =
             nullptr;
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] "
             << old_owner->name
-            << " released mutex\n";
+            << " released mutex\n");
 
         /*
-         * 釋放 Mutex 後，重新計算 owner
-         * 還需要保留多少有效優先級。
+         * 只有在 PI 開啟時，才需要在釋放 Mutex
+         * 後重新計算 old_owner 的有效優先級。
          */
-        recomputeEffectivePriority(
-            old_owner);
+        if (priority_inheritance_enabled_)
+        {
+            recomputeEffectivePriority(
+                old_owner);
+        }
 
         return true;
     }
 
     /*
-     * 取最高有效優先級 waiter。
+     * 取 wait list 中優先順序最高的 waiter。
+     *
+     * 這部分不需要因 PI 關閉而移除，
+     * 因為它屬於 Mutex waiter 的喚醒策略，
+     * 不是 owner priority inheritance。
      */
     TaskControlBlock *next_owner =
         mutex.waiters_.front();
@@ -665,21 +734,25 @@ bool Scheduler::unlockMutex(
     enqueueReadyTask(
         next_owner);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] Mutex ownership transferred from "
         << old_owner->name
         << " to "
         << next_owner->name
-        << '\n';
+        << '\n');
 
     /*
-     * old_owner 已釋放此 Mutex，
-     * 重新計算它的有效優先級。
+     * old_owner 已釋放此 Mutex。
+     * 只有 PI 開啟時，才重新計算它仍需保留的
+     * effective priority。
      */
-    recomputeEffectivePriority(
-        old_owner);
+    if (priority_inheritance_enabled_)
+    {
+        recomputeEffectivePriority(
+            old_owner);
+    }
 
     return true;
 }
@@ -823,8 +896,8 @@ void Scheduler::recomputeEffectivePriorityRecursive(
     {
         if (new_priority > old_priority)
         {
-            std::cout
-                << "[Tick "
+            RTOS_TRACE(
+                "[Tick "
                 << current_tick_
                 << "] Priority inheritance: "
                 << task->name
@@ -832,12 +905,12 @@ void Scheduler::recomputeEffectivePriorityRecursive(
                 << static_cast<int>(old_priority)
                 << " -> "
                 << static_cast<int>(new_priority)
-                << '\n';
+                << '\n');
         }
         else
         {
-            std::cout
-                << "[Tick "
+            RTOS_TRACE(
+                "[Tick "
                 << current_tick_
                 << "] Priority recomputed: "
                 << task->name
@@ -845,7 +918,7 @@ void Scheduler::recomputeEffectivePriorityRecursive(
                 << static_cast<int>(old_priority)
                 << " -> "
                 << static_cast<int>(new_priority)
-                << '\n';
+                << '\n');
         }
     }
 
@@ -855,7 +928,7 @@ void Scheduler::recomputeEffectivePriorityRecursive(
      */
     if (task->waiting_mutex == nullptr)
     {
-        return; 
+        return;
     }
 
     rtos::Mutex *waiting_mutex =
@@ -989,20 +1062,51 @@ void Scheduler::printDeadlockPath(
     {
         if (path[index] != nullptr)
         {
-            std::cout
-                << path[index]->name;
+            RTOS_TRACE(
+                path[index]->name);
         }
         else
         {
-            std::cout
-                << "<null>";
+            RTOS_TRACE(
+                "<null>");
         }
 
         if (index + 1 <
             path.size())
         {
-            std::cout
-                << " -> ";
+            RTOS_TRACE(
+                " -> ");
         }
     }
+}
+
+void Scheduler::enableYieldProfiling(
+    std::size_t warmup_samples,
+    std::size_t expected_samples)
+{
+    yield_profiling_enabled_ = true;
+
+    profiling_warmup_remaining_ =
+        warmup_samples;
+
+    yield_cycle_samples_ns_.clear();
+
+    yield_cycle_samples_ns_.reserve(
+        expected_samples);
+}
+
+const std::vector<std::uint64_t> &
+Scheduler::getYieldCycleSamples() const
+{
+    return yield_cycle_samples_ns_;
+}
+
+std::uint64_t Scheduler::currentTick() const
+{
+    return current_tick_;
+}
+
+void Scheduler::setPriorityInheritanceEnabled(bool enabled)
+{
+    priority_inheritance_enabled_ = enabled;
 }

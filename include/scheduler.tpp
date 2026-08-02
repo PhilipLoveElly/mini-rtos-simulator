@@ -1,5 +1,7 @@
 #pragma once
 
+#include "trace.hpp"
+
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -107,14 +109,14 @@ bool Scheduler::sendMessage(
         enqueueReadyTask(
             receiver);
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Message sent directly from "
             << current_task_->name
             << " to "
             << receiver->name
-            << '\n';
+            << '\n');
 
         return true;
     }
@@ -129,15 +131,15 @@ bool Scheduler::sendMessage(
         queue.buffer_.push_back(
             value);
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] "
             << current_task_->name
             << " sent message"
             << " (queue size = "
             << queue.buffer_.size()
-            << ")\n";
+            << ")\n");
 
         return true;
     }
@@ -149,6 +151,9 @@ bool Scheduler::sendMessage(
      * Sender 必須 Blocked，
      * 並保存它準備傳送的 value。
      */
+
+    ++queue.sender_block_count_;
+
     current_task_->state =
         TaskState::Blocked;
 
@@ -166,12 +171,12 @@ bool Scheduler::sendMessage(
         current_task_,
         value);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
-        << " blocked: message queue full\n";
+        << " blocked: message queue full\n");
 
     swapcontext(
         &current_task_->context,
@@ -202,15 +207,15 @@ bool Scheduler::receiveMessage(
 
         queue.buffer_.pop_front();
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] "
             << current_task_->name
             << " received message"
             << " (queue size = "
             << queue.buffer_.size()
-            << ")\n";
+            << ")\n");
 
         /*
          * receive 後空出了一個 slot。
@@ -246,12 +251,12 @@ bool Scheduler::receiveMessage(
             enqueueReadyTask(
                 sender);
 
-            std::cout
-                << "[Tick "
+            RTOS_TRACE(
+                "[Tick "
                 << current_tick_
                 << "] "
                 << sender->name
-                << " unblocked: queue slot available\n";
+                << " unblocked: queue slot available\n");
         }
 
         return true;
@@ -294,14 +299,14 @@ bool Scheduler::receiveMessage(
         enqueueReadyTask(
             sender);
 
-        std::cout
-            << "[Tick "
+        RTOS_TRACE(
+            "[Tick "
             << current_tick_
             << "] Message transferred directly from "
             << sender->name
             << " to "
             << current_task_->name
-            << '\n';
+            << '\n');
 
         return true;
     }
@@ -312,6 +317,8 @@ bool Scheduler::receiveMessage(
      *
      * Receiver 進入 Blocked。
      */
+    ++queue.receiver_block_count_;
+
     current_task_->state =
         TaskState::Blocked;
 
@@ -329,12 +336,12 @@ bool Scheduler::receiveMessage(
         current_task_,
         output);
 
-    std::cout
-        << "[Tick "
+    RTOS_TRACE(
+        "[Tick "
         << current_tick_
         << "] "
         << current_task_->name
-        << " blocked: message queue empty\n";
+        << " blocked: message queue empty\n");
 
     swapcontext(
         &current_task_->context,
